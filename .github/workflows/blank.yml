@@ -1,26 +1,15 @@
 name: Build APK
 
-# Put this file at .github/workflows/build-apk.yml in your repo.
-#
-# Assumes the Gradle project root (the folder with settings.gradle.kts) is at
-# repo-root/navbar_proj — i.e. you pushed the "navbar_proj" folder as-is. If you
-# instead pushed navbar_proj's *contents* directly at the repo root, delete the
-# "Locate project root" step below and just hardcode PROJECT_DIR="." everywhere,
-# or leave it — the locate step finds it automatically either way.
-#
-# The project's gradlew/gradle-wrapper.jar were not included in the zip, so this
-# workflow installs Gradle 8.7 itself (matching gradle-wrapper.properties) and
-# calls `gradle` directly — no wrapper required. If you add the wrapper files to
-# the repo later, this still works unchanged since it prefers ./gradlew when present.
-
 on:
   push:
     branches: [ main, master ]
   pull_request:
-  workflow_dispatch: {}
+    branches: [ main, master ]
+  workflow_dispatch: {}   # allows manually clicking "Run workflow" in the Actions tab
 
 jobs:
   build:
+    name: Build Debug APK
     runs-on: ubuntu-latest
 
     steps:
@@ -33,117 +22,49 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Locate Gradle project root
-        id: proj
-        run: |
-          MATCH=$(find . -maxdepth 4 -name settings.gradle.kts | head -n1)
-          if [ -z "$MATCH" ]; then
-            echo "::error::Could not find settings.gradle.kts anywhere in the repo."
-            exit 1
-          fi
-          DIR=$(dirname "$MATCH")
-          echo "Project root: $DIR"
-          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
-
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
 
-      - name: Install required SDK platform & build-tools
-        run: sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
         with:
-          gradle-version: 8.7
-          cache-read-only: false
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
-      - name: Build debug APK
-        working-directory: ${{ steps.proj.outputs.dir }}
-        run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew assembleDebug --stacktrace --no-daemon
-          else
-            gradle assembleDebug --stacktrace --no-daemon
-          fi
+      # This repo's ZIP does not include the binary gradle-wrapper.jar (it could not be
+      # downloaded in the offline environment the project was assembled in), only
+      # gradle/wrapper/gradle-wrapper.properties (pinned to Gradle 8.7). GitHub's
+      # ubuntu-latest runners ship Gradle preinstalled, so we use it once to generate
+      # the wrapper jar, then use ./gradlew for every build step after that — same as
+      # Android Studio does automatically the first time you open the project locally.
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version 8.7
 
-      - name: Upload APK artifact
+      - name: Grant execute permission to gradlew
+        run: chmod +x ./gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: btcsignal-debug-apk
-          path: ${{ steps.proj.outputs.dir }}/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: errorname: Build APK
-
-# Put this file at .github/workflows/build-apk.yml in your repo.
-#
-# Assumes the Gradle project root (the folder with settings.gradle.kts) is at
-# repo-root/navbar_proj — i.e. you pushed the "navbar_proj" folder as-is. If you
-# instead pushed navbar_proj's *contents* directly at the repo root, delete the
-# "Locate project root" step below and just hardcode PROJECT_DIR="." everywhere,
-# or leave it — the locate step finds it automatically either way.
-#
-# The project's gradlew/gradle-wrapper.jar were not included in the zip, so this
-# workflow installs Gradle 8.7 itself (matching gradle-wrapper.properties) and
-# calls `gradle` directly — no wrapper required. If you add the wrapper files to
-# the repo later, this still works unchanged since it prefers ./gradlew when present.
-
-on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-  workflow_dispatch: {}
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Locate Gradle project root
-        id: proj
-        run: |
-          MATCH=$(find . -maxdepth 4 -name settings.gradle.kts | head -n1)
-          if [ -z "$MATCH" ]; then
-            echo "::error::Could not find settings.gradle.kts anywhere in the repo."
-            exit 1
-          fi
-          DIR=$(dirname "$MATCH")
-          echo "Project root: $DIR"
-          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Install required SDK platform & build-tools
-        run: sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: 8.7
-          cache-read-only: false
-
-      - name: Build debug APK
-        working-directory: ${{ steps.proj.outputs.dir }}
-        run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew assembleDebug --stacktrace --no-daemon
-          else
-            gradle assembleDebug --stacktrace --no-daemon
-          fi
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: btcsignal-debug-apk
-          path: ${{ steps.proj.outputs.dir }}/app/build/outputs/apk/debug/*.apk
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Run unit tests
+        run: ./gradlew test --stacktrace
+        continue-on-error: true   # don't block the APK artifact if a test fails; check the log
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: app/build/reports/tests/
+          if-no-files-found: ignore
